@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>大專營義工報名查詢系統</title>
+    <title>2026大專營義工報名查詢系統</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- React & ReactDOM -->
@@ -13,25 +13,34 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        /* 長按 3 秒的進度條動畫 */
+        @keyframes progressFill {
+            0% { width: 0%; }
+            100% { width: 100%; }
+        }
+        .animate-progress {
+            animation: progressFill 3s linear forwards;
+        }
+    </style>
 </head>
 <body class="bg-gray-50 text-gray-800 font-sans antialiased min-h-screen">
     <div id="root"></div>
 
     <script type="text/babel">
         /**
-         * @fileoverview 2025大專營義工報名查詢系統 (前端獨立版)
-         * @version 1.1.0 - 新增逐日詳細動態統計 (義工/用餐/住宿)
+         * @fileoverview 2026大專營義工報名查詢系統 (前端獨立版)
+         * @version 1.2.0 - 換用 2026 資料源，新增電話號碼前端防護與排序邏輯
          */
 
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
         // 預設表單網址
         const REGISTRATION_FORM_URL = "https://forms.gle/nGaz3QtQshyCFyW37";
 
-        // Google Sheet 網路 CSV 連結
-        const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR9GsgSJe3I86qwAdEQRuBxCKIPdNX_tcahXKQZqfSqmeY4WpRxjMEdhFh2ZI1trJVfmQfPL5tDunkW/pub?gid=1714353746&single=true&output=csv";
+        // 2026 Google Sheet 網路 CSV 連結
+        const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSVLjgvvd2zI3hdmklfAUkLWkBiqxKP2soHNtRX6M7uOU7GQdLfA77-WmNmBp6ZqpR7-HMnd6OcWE-d/pub?gid=1461714518&single=true&output=csv";
 
         /**
          * 處理剪貼簿複製邏輯
@@ -57,6 +66,67 @@
                 console.error("複製失敗:", error);
                 return false;
             }
+        };
+
+        /**
+         * 獨立組件：處理電話號碼的遮蔽與長按顯示邏輯
+         * @param {Object} props
+         * @param {string} props.phoneNumber - 原始電話號碼
+         */
+        const PhoneDisplayCell = ({ phoneNumber }) => {
+            const [isVisible, setIsVisible] = useState(false);
+            const [isPressing, setIsPressing] = useState(false);
+            const pressTimer = useRef(null);
+
+            const handlePressStart = (e) => {
+                if (isVisible || !phoneNumber) return;
+                // 僅允許左鍵點擊或觸控
+                if (e.type === 'mousedown' && e.button !== 0) return;
+                
+                setIsPressing(true);
+                pressTimer.current = setTimeout(() => {
+                    setIsVisible(true);
+                    setIsPressing(false);
+                }, 3000); // 嚴格執行 3 秒要求
+            };
+
+            const handlePressEnd = () => {
+                setIsPressing(false);
+                if (pressTimer.current) {
+                    clearTimeout(pressTimer.current);
+                    pressTimer.current = null;
+                }
+            };
+
+            const handleContextMenu = (e) => {
+                // 阻擋手機原生選單，避免長按被系統行為中斷
+                e.preventDefault(); 
+            };
+
+            if (!phoneNumber) return <td className="px-3 py-1.5 text-xs text-gray-400 text-center">-</td>;
+
+            // 預設遮蔽格式 (保留前4與後3碼)
+            const maskedNumber = phoneNumber.length >= 8 
+                ? `${phoneNumber.substring(0, 4)}***${phoneNumber.substring(phoneNumber.length - 3)}`
+                : "***";
+
+            return (
+                <td 
+                    className={`px-3 py-1.5 text-xs text-gray-600 select-none cursor-pointer relative transition-colors ${isPressing ? 'bg-red-50' : ''}`}
+                    onMouseDown={handlePressStart}
+                    onMouseUp={handlePressEnd}
+                    onMouseLeave={handlePressEnd}
+                    onTouchStart={handlePressStart}
+                    onTouchEnd={handlePressEnd}
+                    onContextMenu={handleContextMenu}
+                    title="長按 3 秒解鎖顯示"
+                >
+                    {isVisible ? phoneNumber : maskedNumber}
+                    {isPressing && (
+                        <div className="absolute bottom-0 left-0 h-0.5 bg-red-500 animate-progress" />
+                    )}
+                </td>
+            );
         };
 
         /**
@@ -127,28 +197,56 @@
             };
 
             /**
-             * 計算過濾後的名單，支援特定前綴的組別歸併
-             * @returns {Array<Object>} 過濾後的義工陣列
+             * 計算過濾與排序後的名單，支援特定前綴的組別歸併
+             * 排序規則：1. 依小組排序 -> 2. 依身分別(幹部優先)
+             * @returns {Array<Object>} 過濾與排序後的義工陣列
              */
             const filteredVolunteers = useMemo(() => {
-                if (!filterConfig.type || !filterConfig.value) return volunteerList;
+                let filteredList = volunteerList;
                 
-                return volunteerList.filter(row => {
-                    const groupName = row[filterConfig.type] || "";
+                if (filterConfig.type && filterConfig.value) {
+                    filteredList = volunteerList.filter(row => {
+                        const groupName = row[filterConfig.type] || "";
+                        
+                        if (filterConfig.type === '小組') {
+                            if (filterConfig.value === '餐廳小組' && (groupName === '餐廳小組' || groupName.startsWith('餐廳/'))) {
+                                return true;
+                            }
+                            if (filterConfig.value === '廚房小組' && (groupName === '廚房小組' || groupName.startsWith('廚房/'))) {
+                                return true;
+                            }
+                        }
+                        
+                        return groupName === filterConfig.value;
+                    });
+                }
+
+                // 排序邏輯
+                return filteredList.sort((a, b) => {
+                    const groupA = a['小組'] || "";
+                    const groupB = b['小組'] || "";
                     
-                    // 特例處理：餐廳小組與廚房小組支援前綴匹配
-                    if (filterConfig.type === '小組') {
-                        if (filterConfig.value === '餐廳小組' && (groupName === '餐廳小組' || groupName.startsWith('餐廳/'))) {
-                            return true;
-                        }
-                        if (filterConfig.value === '廚房小組' && (groupName === '廚房小組' || groupName.startsWith('廚房/'))) {
-                            return true;
-                        }
+                    // 1. 先依小組名稱排序
+                    if (groupA !== groupB) {
+                        return groupA.localeCompare(groupB, 'zh-TW');
                     }
                     
-                    return groupName === filterConfig.value;
+                    // 2. 若同小組，再依身分別排序 (幹部優先)
+                    const roleA = a['身分別'] || "";
+                    const roleB = b['身分別'] || "";
+                    if (roleA === roleB) return 0;
+                    if (roleA === '幹部') return -1;
+                    if (roleB === '幹部') return 1;
+                    return roleA.localeCompare(roleB, 'zh-TW');
                 });
             }, [volunteerList, filterConfig]);
+
+            /**
+             * 取得畫面上實際要顯示的表頭，過濾掉不需要顯示的欄位(如：出生年)
+             */
+            const displayHeaders = useMemo(() => {
+                return parsedHeaders.filter(header => header !== "出生年");
+            }, [parsedHeaders]);
 
             /**
              * 統計相關數據 (總人數與每日詳細的義工/用餐/住宿狀況)
@@ -163,7 +261,6 @@
 
                 // 動態解析標題並建立統計結構
                 parsedHeaders.forEach(header => {
-                    // 使用正則表達式提取日期 (如 8/07) 與 項目 (如 義工、午餐)
                     const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
                     if (match) {
                         const dateStr = match[1];
@@ -211,7 +308,7 @@
             const handleExportCSV = () => {
                 try {
                     const csv = Papa.unparse(filteredVolunteers);
-                    const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' }); // 加入 BOM 解決中文亂碼
+                    const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' }); 
                     const link = document.createElement("a");
                     const url = URL.createObjectURL(blob);
                     
@@ -227,7 +324,7 @@
             };
 
             if (isLoading) {
-                return <div className="flex h-screen items-center justify-center text-xl font-medium text-gray-600">資料載入中...</div>;
+                return <div className="flex h-screen items-center justify-center text-xl font-medium text-gray-600">載入 2026 資料源中...</div>;
             }
 
             return (
@@ -255,7 +352,7 @@
                                     複製催報名訊息
                                 </button>
                                 {copyStatus && (
-                                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs py-1 px-3 rounded shadow-lg whitespace-nowrap">
+                                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs py-1 px-3 rounded shadow-lg whitespace-nowrap z-10">
                                         {copyStatus}
                                     </div>
                                 )}
@@ -308,11 +405,11 @@
                     {/* Data Table */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                         <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left whitespace-nowrap">
+                            <table className="w-full text-sm text-left whitespace-nowrap min-w-max">
                                 <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b border-gray-200">
                                     <tr>
-                                        {parsedHeaders.map((header, index) => (
-                                            <th key={index} className="px-4 py-3 font-medium">{header}</th>
+                                        {displayHeaders.map((header, index) => (
+                                            <th key={index} className="px-3 py-2 font-medium">{header}</th>
                                         ))}
                                     </tr>
                                 </thead>
@@ -320,15 +417,21 @@
                                     {filteredVolunteers.length > 0 ? (
                                         filteredVolunteers.map((row, rowIndex) => (
                                             <tr key={rowIndex} className="border-b border-gray-100 hover:bg-blue-50/50 transition-colors">
-                                                {parsedHeaders.map((header, colIndex) => {
+                                                {displayHeaders.map((header, colIndex) => {
                                                     const val = row[header];
+                                                    
+                                                    // 特殊欄位：電話防護
+                                                    if (header === '電話') {
+                                                        return <PhoneDisplayCell key={colIndex} phoneNumber={val} />;
+                                                    }
+
                                                     // 針對數字 1 進行視覺優化 (例如便當、住宿)
                                                     const displayVal = (val === "1" && header.includes("/")) 
-                                                        ? <span className="inline-flex items-center justify-center w-5 h-5 bg-green-100 text-green-700 rounded-full text-xs font-bold">✓</span> 
+                                                        ? <span className="inline-flex items-center justify-center w-4 h-4 bg-green-100 text-green-700 rounded-full text-[10px] font-bold">✓</span> 
                                                         : (val === "0" && header.includes("/")) ? <span className="text-gray-300">-</span> : val;
 
                                                     return (
-                                                        <td key={colIndex} className="px-4 py-3 text-gray-600">
+                                                        <td key={colIndex} className="px-3 py-1.5 text-gray-600 text-xs">
                                                             {displayVal}
                                                         </td>
                                                     );
@@ -337,7 +440,7 @@
                                         ))
                                     ) : (
                                         <tr>
-                                            <td colSpan={parsedHeaders.length} className="px-4 py-8 text-center text-gray-500">
+                                            <td colSpan={displayHeaders.length} className="px-4 py-8 text-center text-gray-500">
                                                 找不到符合條件的義工資料。
                                             </td>
                                         </tr>
