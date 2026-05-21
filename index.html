@@ -23,6 +23,22 @@
         .animate-progress {
             animation: progressFill 3s linear forwards;
         }
+        /* 自定義捲軸樣式，讓手機與電腦體驗更一致 */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800 font-sans antialiased min-h-screen">
@@ -31,7 +47,7 @@
     <script type="text/babel">
         /**
          * @fileoverview 2026大專營義工報名查詢系統 (前端獨立版)
-         * @version 1.3.0 - 表單 UI 緊湊化，動態拆分日期與項目，並增加天數分隔線
+         * @version 1.4.0 - 修正 UX 風險：實作雙軸鎖定 (固定表頭與姓名欄位)，優化手機端查閱體驗
          */
 
         const { useState, useEffect, useMemo, useRef } = React;
@@ -87,7 +103,7 @@
                 pressTimer.current = setTimeout(() => {
                     setIsVisible(true);
                     setIsPressing(false);
-                }, 3000); // 嚴格執行 3 秒要求
+                }, 3000); 
             };
 
             const handlePressEnd = () => {
@@ -99,13 +115,11 @@
             };
 
             const handleContextMenu = (e) => {
-                // 阻擋手機原生選單，避免長按被系統行為中斷
                 e.preventDefault(); 
             };
 
             if (!phoneNumber) return <td className="px-3 py-1.5 text-xs text-gray-400 text-center">-</td>;
 
-            // 預設遮蔽格式 (保留前4與後3碼)
             const maskedNumber = phoneNumber.length >= 8 
                 ? `${phoneNumber.substring(0, 4)}***${phoneNumber.substring(phoneNumber.length - 3)}`
                 : "***";
@@ -145,7 +159,6 @@
 
             /**
              * 初始化應用程式：解析網址參數並從網路載入資料
-             * @returns {void}
              */
             const initApp = () => {
                 try {
@@ -167,8 +180,6 @@
 
             /**
              * 從網路連結獲取並解析 CSV 資料
-             * @param {string} url - CSV 網址
-             * @returns {Promise<void>}
              */
             const fetchAndParseCSV = async (url) => {
                 try {
@@ -197,9 +208,7 @@
             };
 
             /**
-             * 計算過濾與排序後的名單，支援特定前綴的組別歸併
-             * 排序規則：1. 依小組排序 -> 2. 依身分別(幹部優先)
-             * @returns {Array<Object>} 過濾與排序後的義工陣列
+             * 計算過濾與排序後的名單
              */
             const filteredVolunteers = useMemo(() => {
                 let filteredList = volunteerList;
@@ -216,22 +225,18 @@
                                 return true;
                             }
                         }
-                        
                         return groupName === filterConfig.value;
                     });
                 }
 
-                // 排序邏輯
                 return filteredList.sort((a, b) => {
                     const groupA = a['小組'] || "";
                     const groupB = b['小組'] || "";
                     
-                    // 1. 先依小組名稱排序
                     if (groupA !== groupB) {
                         return groupA.localeCompare(groupB, 'zh-TW');
                     }
                     
-                    // 2. 若同小組，再依身分別排序 (幹部優先)
                     const roleA = a['身分別'] || "";
                     const roleB = b['身分別'] || "";
                     if (roleA === roleB) return 0;
@@ -242,16 +247,14 @@
             }, [volunteerList, filterConfig]);
 
             /**
-             * 取得畫面上實際要顯示的表頭，過濾掉不需要顯示的欄位(如：出生年)
+             * 取得畫面上實際要顯示的表頭
              */
             const displayHeaders = useMemo(() => {
                 return parsedHeaders.filter(header => header !== "出生年");
             }, [parsedHeaders]);
 
             /**
-             * 統計相關數據 (總人數與每日詳細的義工/用餐/住宿狀況)
-             * 自動掃描格式為 "M/DD項目" 的表頭並進行分群統計
-             * @returns {Object|null} 統計結果物件
+             * 統計相關數據
              */
             const manpowerStats = useMemo(() => {
                 if (filteredVolunteers.length === 0) return null;
@@ -259,7 +262,6 @@
                 const statsByDate = {};
                 const validTypes = ['義工', '早餐', '午餐', '晚餐', '住宿'];
 
-                // 動態解析標題並建立統計結構
                 parsedHeaders.forEach(header => {
                     const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
                     if (match) {
@@ -270,13 +272,11 @@
                             if (!statsByDate[dateStr]) {
                                 statsByDate[dateStr] = { 義工: 0, 早餐: 0, 午餐: 0, 晚餐: 0, 住宿: 0 };
                             }
-                            // 加總該欄位值為 "1" 的人數
                             statsByDate[dateStr][itemType] = filteredVolunteers.reduce((sum, row) => sum + (row[header] === "1" ? 1 : 0), 0);
                         }
                     }
                 });
 
-                // 將物件轉換為陣列並按日期排序
                 const dailyStatsArray = Object.entries(statsByDate)
                     .map(([date, counts]) => ({ date, ...counts }))
                     .sort((a, b) => a.date.localeCompare(b.date));
@@ -303,7 +303,7 @@
             };
 
             /**
-             * 將目前過濾後的資料匯出成 CSV
+             * 匯出 CSV
              */
             const handleExportCSV = () => {
                 try {
@@ -352,7 +352,7 @@
                                     複製催報名訊息
                                 </button>
                                 {copyStatus && (
-                                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs py-1 px-3 rounded shadow-lg whitespace-nowrap z-10">
+                                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs py-1 px-3 rounded shadow-lg whitespace-nowrap z-50">
                                         {copyStatus}
                                     </div>
                                 )}
@@ -360,7 +360,7 @@
                         </div>
                     </div>
 
-                    {/* Statistics Section - Detailed Daily Status */}
+                    {/* Statistics Section */}
                     {manpowerStats && (
                         <div className="mb-6">
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4">
@@ -402,27 +402,35 @@
                         </div>
                     )}
 
-                    {/* Data Table */}
+                    {/* Data Table with Dual-Axis Sticky */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm text-left whitespace-nowrap min-w-max">
-                                <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b border-gray-200">
+                        {/* 限制高度並允許雙向滾動，啟動 Sticky 定位 */}
+                        <div className="overflow-auto custom-scrollbar max-h-[65vh] relative">
+                            <table className="w-full text-sm text-left whitespace-nowrap min-w-max border-collapse">
+                                {/* 表頭鎖定在最上方 (z-20) */}
+                                <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0 z-20 shadow-[0_1px_2px_rgba(0,0,0,0.1)]">
                                     <tr>
                                         {displayHeaders.map((header, index) => {
                                             const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
                                             const isVolunteerCol = match && match[2] === '義工';
-                                            const borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "";
+                                            const isNameCol = header === '姓名';
+                                            
+                                            let borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "border-b border-gray-200";
+                                            // 姓名表頭：同時具備 top-0 與 left-0 鎖定，層級最高 (z-30)
+                                            let stickyClass = isNameCol ? "sticky left-0 z-30 bg-gray-100 border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]" : "bg-gray-50";
 
                                             if (match) {
                                                 return (
-                                                    <th key={index} className={`px-1.5 py-2 font-medium text-center align-bottom ${borderClass}`}>
+                                                    <th key={index} className={`px-1.5 py-2 font-medium text-center align-bottom ${borderClass} ${stickyClass}`}>
                                                         <div className="text-[10px] text-gray-400 font-normal leading-none mb-1">{match[1]}</div>
                                                         <div className="leading-none">{match[2]}</div>
                                                     </th>
                                                 );
                                             }
                                             return (
-                                                <th key={index} className={`px-3 py-2 font-medium align-bottom ${borderClass}`}>{header}</th>
+                                                <th key={index} className={`px-3 py-2 font-medium align-bottom ${borderClass} ${stickyClass}`}>
+                                                    {header}
+                                                </th>
                                             );
                                         })}
                                     </tr>
@@ -430,13 +438,17 @@
                                 <tbody>
                                     {filteredVolunteers.length > 0 ? (
                                         filteredVolunteers.map((row, rowIndex) => (
-                                            <tr key={rowIndex} className="border-b border-gray-100 hover:bg-blue-50/50 transition-colors">
+                                            <tr key={rowIndex} className="border-b border-gray-100 hover:bg-blue-50 transition-colors group">
                                                 {displayHeaders.map((header, colIndex) => {
                                                     const val = row[header];
                                                     const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
                                                     const isVolunteerCol = match && match[2] === '義工';
-                                                    const borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "";
+                                                    const isNameCol = header === '姓名';
                                                     const isDateCol = !!match;
+                                                    
+                                                    let borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "";
+                                                    // 姓名資料格：鎖定在左側 (z-10)，並透過 group-hover 同步整行的 hover 變色效果
+                                                    let stickyClass = isNameCol ? "sticky left-0 z-10 bg-white group-hover:bg-blue-50 border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)] font-medium text-gray-800" : "";
                                                     
                                                     // 特殊欄位：電話防護
                                                     if (header === '電話') {
@@ -449,7 +461,7 @@
                                                         : (val === "0" && isDateCol) ? <span className="text-gray-300">-</span> : val;
 
                                                     return (
-                                                        <td key={colIndex} className={`py-1.5 text-gray-600 text-xs ${isDateCol ? 'px-1.5 text-center' : 'px-3'} ${borderClass}`}>
+                                                        <td key={colIndex} className={`py-1.5 text-gray-600 text-xs ${isDateCol ? 'px-1.5 text-center' : 'px-3'} ${borderClass} ${stickyClass}`}>
                                                             {displayVal}
                                                         </td>
                                                     );
