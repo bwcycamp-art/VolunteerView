@@ -15,7 +15,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     
     <style>
-        /* 長按 3 秒的進度條動畫 */
         @keyframes progressFill {
             0% { width: 0%; }
             100% { width: 100%; }
@@ -23,7 +22,6 @@
         .animate-progress {
             animation: progressFill 3s linear forwards;
         }
-        /* 自定義捲軸樣式，讓手機與電腦體驗更一致 */
         .custom-scrollbar::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -47,21 +45,18 @@
     <script type="text/babel">
         /**
          * @fileoverview 2026大專營義工報名查詢系統 (前端獨立版)
-         * @version 1.4.0 - 修正 UX 風險：實作雙軸鎖定 (固定表頭與姓名欄位)，優化手機端查閱體驗
+         * @version 1.8.0 - 修正網址參數中 '+' 號被自動解碼為空格的 Bug，確保特殊符號小組篩選正常
          */
 
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // 預設表單網址
         const REGISTRATION_FORM_URL = "https://forms.gle/nGaz3QtQshyCFyW37";
-
-        // 2026 Google Sheet 網路 CSV 連結
         const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSVLjgvvd2zI3hdmklfAUkLWkBiqxKP2soHNtRX6M7uOU7GQdLfA77-WmNmBp6ZqpR7-HMnd6OcWE-d/pub?gid=1461714518&single=true&output=csv";
 
         /**
-         * 處理剪貼簿複製邏輯
-         * @param {string} text - 要複製的字串
-         * @returns {Promise<boolean>} 是否複製成功
+         * 執行剪貼簿寫入作業
+         * @param {string} text 
+         * @returns {Promise<boolean>} 
          */
         const copyToClipboard = async (text) => {
             try {
@@ -85,9 +80,33 @@
         };
 
         /**
-         * 獨立組件：處理電話號碼的遮蔽與長按顯示邏輯
-         * @param {Object} props
-         * @param {string} props.phoneNumber - 原始電話號碼
+         * 從 URL 查詢字串中安全地提取參數值，保留原始的 '+' 號而不被自動解碼為空格。
+         * @param {string} paramName - 欲提取的參數名稱
+         * @returns {string|null} 解碼後的參數值
+         */
+        const getSafeQueryParam = (paramName) => {
+            const searchString = window.location.search;
+            if (!searchString) return null;
+            
+            // 使用正則表達式精確匹配參數值，規避 URLSearchParams 預設的 '+' 轉空格規範
+            const pattern = new RegExp('[?&]' + paramName + '=([^&]*)');
+            const match = searchString.match(pattern);
+            if (!match) return null;
+
+            const rawValue = match[1];
+            // 將 '+' 替換為 '%2B'，確保 decodeURIComponent 解碼時能正確還原為 '+' 字符
+            const normalizedValue = rawValue.replace(/\+/g, '%2B');
+            
+            try {
+                return decodeURIComponent(normalizedValue);
+            } catch (error) {
+                console.error(`解析網址參數 ${paramName} 時發生解碼錯誤:`, error);
+                return null;
+            }
+        };
+
+        /**
+         * 電話號碼保護元件
          */
         const PhoneDisplayCell = ({ phoneNumber }) => {
             const [isVisible, setIsVisible] = useState(false);
@@ -96,7 +115,6 @@
 
             const handlePressStart = (e) => {
                 if (isVisible || !phoneNumber) return;
-                // 僅允許左鍵點擊或觸控
                 if (e.type === 'mousedown' && e.button !== 0) return;
                 
                 setIsPressing(true);
@@ -143,9 +161,6 @@
             );
         };
 
-        /**
-         * 主應用程式組件
-         */
         const App = () => {
             const [volunteerList, setVolunteerList] = useState([]);
             const [parsedHeaders, setParsedHeaders] = useState([]);
@@ -157,14 +172,11 @@
                 initApp();
             }, []);
 
-            /**
-             * 初始化應用程式：解析網址參數並從網路載入資料
-             */
             const initApp = () => {
                 try {
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const largeGroupParam = urlParams.get('largeGroup');
-                    const smallGroupParam = urlParams.get('smallGroup');
+                    // 改用更安全的參數解析方法，防止 '+' 號變空格
+                    const largeGroupParam = getSafeQueryParam('largeGroup');
+                    const smallGroupParam = getSafeQueryParam('smallGroup');
 
                     if (largeGroupParam) {
                         setFilterConfig({ type: '大組', value: largeGroupParam });
@@ -174,56 +186,44 @@
 
                     fetchAndParseCSV(CSV_URL);
                 } catch (error) {
-                    console.error("系統初始化參數解析失敗:", error);
+                    console.error("參數解析失敗:", error);
                 }
             };
 
-            /**
-             * 從網路連結獲取並解析 CSV 資料
-             */
             const fetchAndParseCSV = async (url) => {
                 try {
                     const response = await fetch(url);
-                    if (!response.ok) throw new Error(`HTTP 錯誤狀態: ${response.status}`);
+                    if (!response.ok) throw new Error(`HTTP 狀態異常: ${response.status}`);
                     const csvText = await response.text();
                     
                     Papa.parse(csvText, {
                         header: true,
                         skipEmptyLines: true,
                         complete: (results) => {
-                            const { meta, data: parsedRecords } = results;
-                            setParsedHeaders(meta.fields || []);
-                            setVolunteerList(parsedRecords || []);
+                            setParsedHeaders(results.meta.fields || []);
+                            setVolunteerList(results.data || []);
                             setIsLoading(false);
                         },
                         error: (error) => {
-                            console.error("CSV 解析錯誤:", error);
+                            console.error("CSV 解析異常:", error);
                             setIsLoading(false);
                         }
                     });
                 } catch (error) {
-                    console.error("獲取網路 CSV 失敗:", error);
+                    console.error("資料獲取異常:", error);
                     setIsLoading(false);
                 }
             };
 
-            /**
-             * 計算過濾與排序後的名單
-             */
             const filteredVolunteers = useMemo(() => {
                 let filteredList = volunteerList;
                 
                 if (filterConfig.type && filterConfig.value) {
                     filteredList = volunteerList.filter(row => {
                         const groupName = row[filterConfig.type] || "";
-                        
                         if (filterConfig.type === '小組') {
-                            if (filterConfig.value === '餐廳小組' && (groupName === '餐廳小組' || groupName.startsWith('餐廳/'))) {
-                                return true;
-                            }
-                            if (filterConfig.value === '廚房小組' && (groupName === '廚房小組' || groupName.startsWith('廚房/'))) {
-                                return true;
-                            }
+                            if (filterConfig.value === '餐廳小組' && (groupName === '餐廳小組' || groupName.startsWith('餐廳/'))) return true;
+                            if (filterConfig.value === '廚房小組' && (groupName === '廚房小組' || groupName.startsWith('廚房/'))) return true;
                         }
                         return groupName === filterConfig.value;
                     });
@@ -232,10 +232,7 @@
                 return filteredList.sort((a, b) => {
                     const groupA = a['小組'] || "";
                     const groupB = b['小組'] || "";
-                    
-                    if (groupA !== groupB) {
-                        return groupA.localeCompare(groupB, 'zh-TW');
-                    }
+                    if (groupA !== groupB) return groupA.localeCompare(groupB, 'zh-TW');
                     
                     const roleA = a['身分別'] || "";
                     const roleB = b['身分別'] || "";
@@ -246,35 +243,31 @@
                 });
             }, [volunteerList, filterConfig]);
 
-            /**
-             * 取得畫面上實際要顯示的表頭
-             */
             const displayHeaders = useMemo(() => {
                 return parsedHeaders.filter(header => header !== "出生年");
             }, [parsedHeaders]);
 
-            /**
-             * 統計相關數據
-             */
             const manpowerStats = useMemo(() => {
                 if (filteredVolunteers.length === 0) return null;
                 
                 const statsByDate = {};
                 const validTypes = ['義工', '早餐', '午餐', '晚餐', '住宿'];
 
-                parsedHeaders.forEach(header => {
-                    const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
-                    if (match) {
-                        const dateStr = match[1];
-                        const itemType = match[2];
+                filteredVolunteers.forEach(row => {
+                    parsedHeaders.forEach(header => {
+                        const match = header.match(/^(\d{1,2}\/\d{2})(.*)$/);
+                        if (match) {
+                            const dateStr = match[1];
+                            const itemType = match[2];
 
-                        if (validTypes.includes(itemType)) {
-                            if (!statsByDate[dateStr]) {
-                                statsByDate[dateStr] = { 義工: 0, 早餐: 0, 午餐: 0, 晚餐: 0, 住宿: 0 };
+                            if (validTypes.includes(itemType)) {
+                                if (!statsByDate[dateStr]) {
+                                    statsByDate[dateStr] = { 義工: 0, 早餐: 0, 午餐: 0, 晚餐: 0, 住宿: 0 };
+                                }
+                                statsByDate[dateStr][itemType] += (row[header] === "1" ? 1 : 0);
                             }
-                            statsByDate[dateStr][itemType] = filteredVolunteers.reduce((sum, row) => sum + (row[header] === "1" ? 1 : 0), 0);
                         }
-                    }
+                    });
                 });
 
                 const dailyStatsArray = Object.entries(statsByDate)
@@ -287,11 +280,8 @@
                 };
             }, [filteredVolunteers, parsedHeaders]);
 
-            /**
-             * 處理複製報名連結
-             */
             const handleCopyLink = async () => {
-                let message = `【重要】尚未填寫大專營義工報名的同行善友請注意：\n麻煩儘速撥冗填寫報名表單，以利後續作業，隨喜您的發心！\n報名網址：${REGISTRATION_FORM_URL}`;
+                const message = `【重要】尚未填寫大專營義工報名的同行善友請注意：\n麻煩儘速撥冗填寫報名表單，以利後續作業，隨喜您的發心！\n報名網址：${REGISTRATION_FORM_URL}`;
                 const success = await copyToClipboard(message);
                 
                 if (success) {
@@ -302,9 +292,6 @@
                 }
             };
 
-            /**
-             * 匯出 CSV
-             */
             const handleExportCSV = () => {
                 try {
                     const csv = Papa.unparse(filteredVolunteers);
@@ -319,17 +306,16 @@
                     link.click();
                     document.body.removeChild(link);
                 } catch (error) {
-                    console.error("匯出 CSV 失敗:", error);
+                    console.error("匯出異常:", error);
                 }
             };
 
             if (isLoading) {
-                return <div className="flex h-screen items-center justify-center text-xl font-medium text-gray-600">載入 2026 資料源中...</div>;
+                return <div className="flex h-screen items-center justify-center text-xl font-medium text-gray-600">載入數據中...</div>;
             }
 
             return (
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                    {/* Header Section */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                         <div>
                             <h1 className="text-2xl font-bold text-gray-800">
@@ -360,13 +346,12 @@
                         </div>
                     </div>
 
-                    {/* Statistics Section */}
                     {manpowerStats && (
                         <div className="mb-6">
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7 gap-4">
                                 <div className="bg-blue-50 p-4 rounded-xl shadow-sm border border-blue-200 flex flex-col justify-center items-center text-center">
-                                    <div className="text-sm text-gray-600 font-medium">本組已報名總數</div>
-                                    <div className="text-4xl font-bold text-blue-700 mt-2">{manpowerStats.totalMembers} <span className="text-lg text-gray-500 font-normal">人</span></div>
+                                    <div className="text-sm text-gray-600 font-medium">本組報名總數</div>
+                                    <div className="text-3xl font-bold text-blue-700 mt-2">{manpowerStats.totalMembers} <span className="text-sm text-gray-500 font-normal">人</span></div>
                                 </div>
                                 
                                 {manpowerStats.dailyStats.map(stat => (
@@ -374,7 +359,7 @@
                                         <div className="text-lg text-gray-800 font-bold border-b border-gray-100 pb-2 mb-3 text-center">
                                             {stat.date} 統計
                                         </div>
-                                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-sm">
+                                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
                                             <div className="flex justify-between text-gray-600 bg-gray-50 px-2 py-1 rounded">
                                                 <span>義工</span>
                                                 <span className="font-bold text-gray-800">{stat['義工']}</span>
@@ -402,12 +387,9 @@
                         </div>
                     )}
 
-                    {/* Data Table with Dual-Axis Sticky */}
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                        {/* 限制高度並允許雙向滾動，啟動 Sticky 定位 */}
                         <div className="overflow-auto custom-scrollbar max-h-[65vh] relative">
                             <table className="w-full text-sm text-left whitespace-nowrap min-w-max border-collapse">
-                                {/* 表頭鎖定在最上方 (z-20) */}
                                 <thead className="text-xs text-gray-700 uppercase bg-gray-50 sticky top-0 z-20 shadow-[0_1px_2px_rgba(0,0,0,0.1)]">
                                     <tr>
                                         {displayHeaders.map((header, index) => {
@@ -416,7 +398,6 @@
                                             const isNameCol = header === '姓名';
                                             
                                             let borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "border-b border-gray-200";
-                                            // 姓名表頭：同時具備 top-0 與 left-0 鎖定，層級最高 (z-30)
                                             let stickyClass = isNameCol ? "sticky left-0 z-30 bg-gray-100 border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.15)]" : "bg-gray-50";
 
                                             if (match) {
@@ -445,23 +426,51 @@
                                                     const isVolunteerCol = match && match[2] === '義工';
                                                     const isNameCol = header === '姓名';
                                                     const isDateCol = !!match;
+                                                    const valIsChecked = val === "1";
                                                     
                                                     let borderClass = isVolunteerCol ? "border-l-2 border-gray-300" : "";
-                                                    // 姓名資料格：鎖定在左側 (z-10)，並透過 group-hover 同步整行的 hover 變色效果
                                                     let stickyClass = isNameCol ? "sticky left-0 z-10 bg-white group-hover:bg-blue-50 border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.1)] font-medium text-gray-800" : "";
                                                     
-                                                    // 特殊欄位：電話防護
                                                     if (header === '電話') {
                                                         return <PhoneDisplayCell key={colIndex} phoneNumber={val} />;
                                                     }
 
-                                                    // 針對數字 1 進行視覺優化 (例如便當、住宿)
-                                                    const displayVal = (val === "1" && isDateCol) 
-                                                        ? <span className="inline-flex items-center justify-center w-4 h-4 bg-green-100 text-green-700 rounded-full text-[10px] font-bold">✓</span> 
-                                                        : (val === "0" && isDateCol) ? <span className="text-gray-300">-</span> : val;
+                                                    let displayVal = null;
+                                                    let anomalyClass = "";
+
+                                                    if (isDateCol) {
+                                                        const dateStr = match[1];
+                                                        const itemType = match[2];
+                                                        const isVolunteer = row[`${dateStr}義工`] === "1";
+                                                        
+                                                        // 異常定義：未勾選義工，但有勾選任何餐飲 (住宿不計入異常)
+                                                        const hasMeals = ['早餐', '午餐', '晚餐'].some(type => row[`${dateStr}${type}`] === "1");
+                                                        const isConflict = !isVolunteer && hasMeals;
+
+                                                        if (isConflict) {
+                                                            if (itemType === '義工') {
+                                                                anomalyClass = "bg-yellow-100/80"; // 義工欄位亮黃底，提示此處缺漏
+                                                                displayVal = <span className="text-yellow-600 font-bold" title="未排班卻有餐飲">-</span>;
+                                                            } else if (valIsChecked && ['早餐', '午餐', '晚餐'].includes(itemType)) {
+                                                                anomalyClass = "bg-red-100/80"; // 有勾選的餐飲亮紅底，標記嚴重衝突
+                                                                displayVal = <span className="inline-flex items-center justify-center w-4 h-4 bg-red-500 text-white rounded-full text-[10px] font-bold" title="未排班卻勾選">!</span>;
+                                                            } else if (valIsChecked && itemType === '住宿') {
+                                                                // 住宿不受異常牽連，正常渲染
+                                                                displayVal = <span className="inline-flex items-center justify-center w-4 h-4 bg-green-100 text-green-700 rounded-full text-[10px] font-bold">✓</span>;
+                                                            } else {
+                                                                displayVal = <span className="text-gray-300">-</span>;
+                                                            }
+                                                        } else {
+                                                            displayVal = valIsChecked 
+                                                                ? <span className="inline-flex items-center justify-center w-4 h-4 bg-green-100 text-green-700 rounded-full text-[10px] font-bold">✓</span> 
+                                                                : (val === "0" || !val) ? <span className="text-gray-300">-</span> : val;
+                                                        }
+                                                    } else {
+                                                        displayVal = val;
+                                                    }
 
                                                     return (
-                                                        <td key={colIndex} className={`py-1.5 text-gray-600 text-xs ${isDateCol ? 'px-1.5 text-center' : 'px-3'} ${borderClass} ${stickyClass}`}>
+                                                        <td key={colIndex} className={`py-1.5 text-gray-600 text-xs ${isDateCol ? 'px-1.5 text-center' : 'px-3'} ${borderClass} ${stickyClass} ${anomalyClass}`}>
                                                             {displayVal}
                                                         </td>
                                                     );
@@ -471,7 +480,7 @@
                                     ) : (
                                         <tr>
                                             <td colSpan={displayHeaders.length} className="px-4 py-8 text-center text-gray-500">
-                                                找不到符合條件的義工資料。
+                                                無符合條件的數據記錄。
                                             </td>
                                         </tr>
                                     )}
